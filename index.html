@@ -346,15 +346,119 @@ const buttons = {
 const hasFirebase = false;
 let app = null, auth = null, db = null;
 
-const MUSIC_MENU = 'white_records-turbo-pulse-phonk-house-background-music-for-video-full-version-496491.mp3';
-const MUSIC_GAME = 'phatphrogstudio-abyssal-eclipse-demonx27s-bane-477472.mp3';
-const menuMusic = new Audio(MUSIC_MENU);
-const gameMusic = new Audio(MUSIC_GAME);
-menuMusic.loop = true;
-gameMusic.loop = true;
-menuMusic.volume = 0.28;
-gameMusic.volume = 0.26;
 
+const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+
+let musicCtx = null;
+let musicLead = null;
+let musicBass = null;
+let musicFilter = null;
+let musicGain = null;
+let musicTimer = null;
+let musicMode = 'menu';
+let musicBeat = 0;
+
+function ensureMusic() {
+  if (musicCtx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  musicCtx = new AC();
+
+  musicLead = musicCtx.createOscillator();
+  musicBass = musicCtx.createOscillator();
+  musicFilter = musicCtx.createBiquadFilter();
+  musicGain = musicCtx.createGain();
+
+  musicLead.type = 'triangle';
+  musicBass.type = 'sine';
+  musicFilter.type = 'lowpass';
+  musicFilter.frequency.value = 1100;
+  musicGain.gain.value = 0;
+
+  const bassGain = musicCtx.createGain();
+  bassGain.gain.value = 0.55;
+
+  musicLead.connect(musicFilter);
+  musicBass.connect(bassGain);
+  musicFilter.connect(musicGain);
+  bassGain.connect(musicGain);
+  musicGain.connect(musicCtx.destination);
+
+  musicLead.start();
+  musicBass.start();
+}
+
+function musicStep() {
+  if (!musicCtx || !musicLead || !musicBass || !musicGain) return;
+
+  const t = musicCtx.currentTime;
+  const menuSeq = [261.63, 329.63, 392.00, 523.25, 392.00, 329.63];
+  const gameSeq = [110.00, 146.83, 164.81, 196.00, 164.81, 146.83];
+
+  const seq = musicMode === 'game' ? gameSeq : menuSeq;
+  const step = musicMode === 'game' ? 0.13 : 0.21;
+  const i = musicBeat % seq.length;
+  const leadFreq = seq[i];
+  const bassFreq = musicMode === 'game'
+    ? (i % 2 === 0 ? 55.00 : 73.42)
+    : (i % 3 === 0 ? 65.41 : 82.41);
+
+  musicLead.frequency.setTargetAtTime(leadFreq, t, 0.015);
+  musicBass.frequency.setTargetAtTime(bassFreq, t, 0.02);
+
+  const pulse = (musicBeat % 4 === 0) ? 0.15 : 0.09;
+  const modeBoost = musicMode === 'game' ? 0.045 : 0.025;
+  musicGain.gain.setTargetAtTime(pulse + modeBoost, t, 0.02);
+  musicFilter.frequency.setTargetAtTime(musicMode === 'game' ? 800 : 1200, t, 0.03);
+
+  musicBeat = (musicBeat + 1) % 12000;
+}
+
+function startMusic(mode) {
+  ensureMusic();
+  if (!musicCtx || !musicGain) return;
+  musicMode = mode === 'game' ? 'game' : 'menu';
+  musicBeat = 0;
+  try { musicCtx.resume(); } catch (e) {}
+  if (musicTimer) clearInterval(musicTimer);
+  musicTimer = setInterval(musicStep, musicMode === 'game' ? 130 : 210);
+  musicStep();
+}
+
+function stopMusicEngine() {
+  if (musicTimer) {
+    clearInterval(musicTimer);
+    musicTimer = null;
+  }
+  if (musicCtx && musicGain) {
+    try {
+      musicGain.gain.setTargetAtTime(0, musicCtx.currentTime, 0.03);
+    } catch (e) {
+      try { musicGain.gain.value = 0; } catch {}
+    }
+  }
+}
+
+const MUSIC_MENU_FILE = 'white_records-turbo-pulse-phonk-house-background-music-for-video-full-version-496491.mp3';
+const TURBO_SFX_FILE = 'awesomeeffects-balloon-pop-sound-effect-504628.mp3';
+
+const menuMusic = new Audio(MUSIC_MENU_FILE);
+menuMusic.loop = true;
+menuMusic.volume = 0.28;
+menuMusic.preload = 'auto';
+menuMusic.preservesPitch = true;
+
+const gameMusic = new Audio(MUSIC_MENU_FILE);
+gameMusic.loop = true;
+gameMusic.volume = 0.18;
+gameMusic.playbackRate = 1.06;
+gameMusic.preservesPitch = true;
+gameMusic.preload = 'auto';
+
+const turboSfx = new Audio(TURBO_SFX_FILE);
+turboSfx.loop = false;
+turboSfx.volume = 0.95;
+turboSfx.preload = 'auto';
 const STORAGE = {
   localUsers: 'nd_local_users_v2',
   localSession: 'nd_local_session_v2',
@@ -393,6 +497,7 @@ let engineOsc = null;
 let engineGain = null;
 let turboCooldown = 0;
 let lastTargetSpeed = 0;
+let lastProfileSave = 0;
 let nextTurboKmh = 40;
 let lastKmh = 0;
 
@@ -527,7 +632,7 @@ function markBagOpened(bagId) {
 }
 
 function resize() {
-  const d = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+  const d = Math.max(1, Math.min(window.devicePixelRatio || 1, isMobile ? 1.25 : 2));
   els.c.width = Math.floor(innerWidth * d);
   els.c.height = Math.floor(innerHeight * d);
   els.c.style.width = innerWidth + 'px';
@@ -561,7 +666,7 @@ function drawCar(x,y,w,h,c,tilt=0,enemy=false) {
   ctx.translate(x + w/2, y + h/2);
   ctx.rotate(tilt * Math.PI / 180);
   ctx.translate(-w/2, -h/2);
-  ctx.shadowBlur = 18;
+  ctx.shadowBlur = isMobile ? 10 : 18;
   ctx.shadowColor = enemy ? '#ff4fd8' : c.c;
   ctx.fillStyle = enemy ? '#ff4fd8' : c.c;
   rr(0,0,w,h,10); ctx.fill();
@@ -1046,7 +1151,7 @@ function notify(msg) {
 }
 
 function bootStars() {
-  stars = Array.from({length:110}, () => ({
+  stars = Array.from({length:isMobile ? 42 : 110}, () => ({
     x: Math.random() * innerWidth,
     y: Math.random() * innerHeight,
     z: Math.random() < .8 ? 1 : 2,
@@ -1133,7 +1238,11 @@ function setEngine(throttle, speed) {
   engineGain.gain.setTargetAtTime(0.012 + throttle * 0.03, t, 0.04);
 }
 function turboBurst() {
-  // Sessiz turbo: patlama sesi kaldırıldı.
+  try {
+    turboSfx.currentTime = 0;
+    turboSfx.playbackRate = 1.0;
+    turboSfx.play().catch(()=>{});
+  } catch (e) {}
   if (!engineCtx || !engineGain) return;
   try {
     const t = engineCtx.currentTime;
@@ -1219,17 +1328,22 @@ function playMenu() {
   try {
     if (gameMusic && !gameMusic.paused) gameMusic.pause();
   } catch (e) {}
-  if (menuMusic.paused) {
-    menuMusic.play().catch(()=>{});
-  }
+  try {
+    if (menuMusic.paused) {
+      menuMusic.currentTime = 0;
+      menuMusic.play().catch(()=>{});
+    }
+  } catch (e) {}
 }
 function playGame() {
   try { menuMusic.pause(); } catch (e) {}
-  try { gameMusic.currentTime = 0; } catch (e) {}
-  gameMusic.play().catch(()=>{});
+  try {
+    gameMusic.currentTime = 0;
+    gameMusic.play().catch(()=>{});
+  } catch (e) {}
   startAudio();
 }
-function stopMusic() { menuMusic.pause(); gameMusic.pause(); }
+function stopMusic() { try { menuMusic.pause(); } catch (e) {} try { gameMusic.pause(); } catch (e) {} }
 function silenceEngine() {
   if (!engineCtx || !engineGain) return;
   try {
@@ -1250,10 +1364,12 @@ function updateRewardEligibility() {
   if (changed) {
     buildMenuBadges();
     if (state === 'bag') buildBag();
+    saveProfileNow().catch(()=>{});
   }
 }
 async function saveProfileNow() {
   if (!currentUser) return;
+  lastProfileSave = performance.now();
   if (db) {
     try {
       await firebaseSaveProfile();
@@ -1264,6 +1380,7 @@ async function saveProfileNow() {
   }
   currentUser.best = best;
   currentUser.selectedCar = selectedCar().id;
+  currentUser.bag = bagItems().map(b => ({ ...b }));
   localUpdateUser();
   saveCurrentUser(currentUser);
 }
@@ -1351,7 +1468,11 @@ function update() {
   lastTargetSpeed = p.ts;
   if (turboCooldown > 0) turboCooldown--;
   updateHud();
-  saveProfileNow().catch(()=>{});
+  const now = performance.now();
+  if (now - lastProfileSave > 900) {
+    lastProfileSave = now;
+    saveProfileNow().catch(()=>{});
+  }
 }
 function loop() {
   if (state !== 'game') return;
@@ -1634,7 +1755,7 @@ window.addEventListener('keydown', (e) => {
   best = 0;
   paused = false;
   gameOver = false;
-  saveSession(null); // Manuel giriş zorunlu: açılışta oturum geri yüklenmez.
+  // Oturum bilgisi silinmez; ama giriş yine manuel yapılır.
   showScreen('login');
   await buildLeader();
   await buildChat();
@@ -1672,6 +1793,11 @@ function stopMusicAndAudio() {
     try { engineOsc.stop(); } catch(e){}
   }
 }
+
+window.addEventListener('beforeunload', () => {
+  try { if (currentUser) saveProfileNow(); } catch (e) {}
+});
+
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     menuMusic.pause();
